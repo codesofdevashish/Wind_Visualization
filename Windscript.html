@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Global Vorticity Map & Flow Ribbon Trails</title>
+    <title>3D Global Vorticity Map & 24h Flow Ribbon Trails</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -16,14 +16,14 @@
 
     <div class="absolute top-4 left-4 bg-slate-950/90 backdrop-blur-md p-6 rounded-xl border border-slate-800 text-white max-w-sm z-10 shadow-2xl">
         <h1 class="text-xl font-bold tracking-wide text-cyan-400 mb-1">Global 3D Vorticity</h1>
-        <p class="text-xs text-slate-400 mb-4">Optimized ECMWF Dataset • May 2026</p>
+        <p class="text-xs text-slate-400 mb-4">ECMWF Reanalysis Data • May 2026</p>
         
         <div class="mb-4">
             <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Active Pressure Level</label>
             <div class="flex items-center justify-between bg-slate-900 p-2 rounded-lg border border-slate-800">
-                <span id="level-display" class="text-sm font-mono text-emerald-400 font-bold">700 hPa (Low-Troposphere)</span>
+                <span id="level-display" class="text-sm font-mono text-emerald-400 font-bold">500 hPa (Mid-Trop / Storms)</span>
             </div>
-            <input id="level-slider" type="range" min="0" max="6" value="4" class="w-full mt-2 accent-cyan-500 bg-slate-800 h-1 rounded-lg appearance-none cursor-pointer">
+            <input id="level-slider" type="range" min="0" max="6" value="6" class="w-full mt-2 accent-cyan-500 bg-slate-800 h-1 rounded-lg appearance-none cursor-pointer">
             <div class="flex justify-between text-[10px] text-slate-500 mt-1 font-mono">
                 <span>1000 hPa (Surf)</span>
                 <span>500 hPa (Mid-Trop)</span>
@@ -32,8 +32,8 @@
 
         <div class="space-y-2 border-t border-slate-900 pt-3 text-xs text-slate-400">
             <div class="flex justify-between"><span>Active Stream Ribbons:</span><span class="font-mono text-slate-200" id="particle-count">0</span></div>
-            <div class="flex justify-between"><span>Matrix Grid Size:</span><span class="font-mono text-cyan-500">31 × 60 Nodes</span></div>
-            <div class="flex justify-between"><span>Status:</span><span class="font-mono text-emerald-400 font-bold" id="status-text">Loading Json...</span></div>
+            <div class="flex justify-between"><span>Visual Mode:</span><span class="font-mono text-cyan-500">Level-Isolated Vectors</span></div>
+            <div class="flex justify-between"><span>Status:</span><span class="font-mono text-emerald-400 font-bold" id="status-text">Loading Data...</span></div>
         </div>
     </div>
 
@@ -107,17 +107,12 @@
         let streamHistoryData = [];
         let linePositions, lineColors;
 
-        // Structured explicitly to align with your Python script output variables
         const pressureLevelsText = [
-            "1000 hPa (Surface Boundary)", 
-            "900 hPa (Lower Boundary Layer)", 
-            "850 hPa (Low-Atmosphere Flow)", 
-            "800 hPa (Condensation Base Layer)", 
-            "700 hPa (Low-Troposphere Dynamics)", 
-            "600 hPa (Mid-Low Structural Layer)",
-            "500 hPa (Mid-Trop / Active Storms)"
+            "1000 hPa (Surface)", "900 hPa (Lower Boundary)", "850 hPa (Low-Atmosphere)", 
+            "800 hPa (Low-Condensation)", "700 hPa (Low-Troposphere)", "600 hPa (Mid-Low Layer)",
+            "500 hPa (Mid-Trop / Storms)"
         ];
-        let currentLevelIndex = 4; // Start at 700 hPa 
+        let currentLevelIndex = 6; 
 
         // --- 5. LOADING WEATHER ARRAYS ---
         async function loadData() {
@@ -135,7 +130,7 @@
             }
         }
 
-        // --- 6. SCIENTIFIC DATA GRID EXTRACTOR ---
+        // --- 6. BILINEAR INTERPOLATION SAMPLER (FIXES DOWN-SAMPLED BLANK VISIBILITY) ---
         function getRealVorticity(latRad, lonRad, levelIdx) {
             if (!weatherData) return 0;
 
@@ -143,16 +138,39 @@
             let lonDeg = lonRad * (180 / Math.PI);
             if (lonDeg < 0) lonDeg += 360;
 
-            const targetLats = weatherData.latitudes;
-            const targetLons = weatherData.longitudes;
+            const gridLats = weatherData.latitudes;
+            const gridLons = weatherData.longitudes;
+            const nLat = gridLats.length;
+            const nLon = gridLons.length;
 
-            let latIdx = Math.floor(((90 - latDeg) / 180) * (targetLats.length - 1));
-            let lonIdx = Math.floor((lonDeg / 360) * (targetLons.length - 1));
+            // Compute exact float fractional index positions
+            let latPct = (90 - latDeg) / 180;
+            let lonPct = lonDeg / 360;
 
-            latIdx = Math.max(0, Math.min(latIdx, targetLats.length - 1));
-            lonIdx = Math.max(0, Math.min(lonIdx, targetLons.length - 1));
+            let latIdxFloat = latPct * (nLat - 1);
+            let lonIdxFloat = lonPct * (nLon - 1);
 
-            return weatherData.vorticity_data[levelIdx][latIdx][lonIdx];
+            let x0 = Math.floor(lonIdxFloat);
+            let x1 = Math.min(x0 + 1, nLon - 1);
+            let y0 = Math.floor(latIdxFloat);
+            let y1 = Math.min(y0 + 1, nLat - 1);
+
+            x0 = Math.max(0, Math.min(x0, nLon - 1));
+            y0 = Math.max(0, Math.min(y0, nLat - 1));
+
+            let u = lonIdxFloat - x0;
+            let v = latIdxFloat - y0;
+
+            const matrix = weatherData.vorticity_data[levelIdx];
+            
+            // Query 4 surrounding data coordinates
+            let v00 = matrix[y0][x0];
+            let v10 = matrix[y0][x1];
+            let v01 = matrix[y1][x0];
+            let v11 = matrix[y1][x1];
+
+            // Blend mathematically
+            return (1 - u) * (1 - v) * v00 + u * (1 - v) * v10 + (1 - u) * v * v01 + u * v * v11;
         }
 
         // --- 7. LINE SEGMENT BUFFER SYSTEM ---
@@ -223,7 +241,8 @@
         }
 
         function calculateCartesianCoordinates(phi, theta) {
-            const currentAltRadius = globeRadius + 0.9 + (currentLevelIndex * 0.25);
+            // Elevated rendering buffer offset to stay perfectly readable above high-res globe geometry meshes
+            const currentAltRadius = globeRadius + 1.2 + (currentLevelIndex * 0.3);
             return {
                 x: currentAltRadius * Math.sin(phi) * Math.cos(theta),
                 y: currentAltRadius * Math.cos(phi),
@@ -248,12 +267,16 @@
                 const lonRad = stream.theta;
 
                 const voVal = getRealVorticity(latRad, lonRad, currentLevelIndex);
-                const speedScale = voVal * 4200;
-                const baseZonalFlow = 0.45; 
+                
+                // Boosted kinetic scaling to compensate for the wide spacing of downsampled matrix layouts
+                const speedScale = voVal * 85000; 
+                const baseZonalFlow = 0.65; 
 
+                // Process vector changes safely
                 stream.phi   -= (Math.sin(lonRad * 3) * speedScale) * 0.0016;
                 stream.theta += (baseZonalFlow + Math.cos(latRad * 2) * speedScale) * 0.0016;
 
+                // Recycling boundaries configuration
                 if (stream.age >= stream.maxAge || stream.phi <= 0.05 || stream.phi >= Math.PI - 0.05) {
                     stream.phi = Math.acos(Math.random() * 2 - 1);
                     stream.theta = Math.random() * Math.PI * 2;
@@ -273,6 +296,7 @@
                     }
                 }
 
+                // Render lines buffer arrays mapping
                 for (let h = 0; h < segmentsPerStream - 1; h++) {
                     const pStart = stream.history[h];
                     const pEnd = stream.history[h + 1];
@@ -286,24 +310,26 @@
                     linePositions[bufferIdx + 5] = pEnd.z;
 
                     const trailFadeRatio = h / (segmentsPerStream - 1); 
-                    const normalizedIntensity = Math.min(Math.abs(pStart.vo) * 24000, 1.0);
+                    const normalizedIntensity = Math.min(Math.abs(pStart.vo) * 28000, 1.0);
 
                     if (pStart.vo >= 0) {
+                        // High intensity Cyan Cyclonic arcs
                         lineColors[bufferIdx]     = 0.0;
-                        lineColors[bufferIdx + 1] = (0.4 + (normalizedIntensity * 0.6)) * trailFadeRatio;
+                        lineColors[bufferIdx + 1] = (0.3 + (normalizedIntensity * 0.7)) * trailFadeRatio;
                         lineColors[bufferIdx + 2] = 1.0 * trailFadeRatio;
 
                         lineColors[bufferIdx + 3] = 0.0;
-                        lineColors[bufferIdx + 4] = (0.4 + (normalizedIntensity * 0.6)) * trailFadeRatio;
+                        lineColors[bufferIdx + 4] = (0.3 + (normalizedIntensity * 0.7)) * trailFadeRatio;
                         lineColors[bufferIdx + 5] = 1.0 * trailFadeRatio;
                     } else {
+                        // High visibility Fiery Orange Anticyclonic structures
                         lineColors[bufferIdx]     = 1.0 * trailFadeRatio;
-                        lineColors[bufferIdx + 1] = (0.3 + (normalizedIntensity * 0.5)) * trailFadeRatio;
-                        lineColors[bufferIdx + 2] = 0.1 * trailFadeRatio;
+                        lineColors[bufferIdx + 1] = (0.2 + (normalizedIntensity * 0.6)) * trailFadeRatio;
+                        lineColors[bufferIdx + 2] = 0.05 * trailFadeRatio;
 
                         lineColors[bufferIdx + 3] = 1.0 * trailFadeRatio;
-                        lineColors[bufferIdx + 4] = (0.3 + (normalizedIntensity * 0.5)) * trailFadeRatio;
-                        lineColors[bufferIdx + 5] = 0.1 * trailFadeRatio;
+                        lineColors[bufferIdx + 4] = (0.2 + (normalizedIntensity * 0.6)) * trailFadeRatio;
+                        lineColors[bufferIdx + 5] = 0.05 * trailFadeRatio;
                     }
 
                     bufferIdx += 6; 
